@@ -1,291 +1,251 @@
+#!/usr/bin/env python3
 """
-Main pipeline orchestration for CNN sentiment analysis.
-Author: Mahtab (Project Lead)
+Complete main pipeline for CNN sentiment analysis.
+Mahtab's integration script.
 """
 
-import argparse
-import sys
 import os
-import logging
-from pathlib import Path
-from typing import Dict, Optional
-import pickle
+import sys
+import argparse
+import pandas as pd
 import numpy as np
+from pathlib import Path
 
-# Add src to path for imports
-sys.path.append(str(Path(__file__).parent))
+# Setup paths
+current_dir = Path(__file__).parent
+project_root = current_dir.parent
+sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(project_root))
 
-# Import from team members' work (will be available after they complete)
-try:
-    from data.processor import load_and_process_data, ProcessingConfig
-    from models.trainer import ModelTrainer, TrainConfig, ModelConfig, plot_training_curves, plot_confusion_matrix
-    from models.inference import SentimentPredictor, load_predictor
-except ImportError as e:
-    print(f"⚠️ Some modules not available yet: {e}")
-    print("This is normal if team members haven't finished their work yet.")
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+print("🚀 CNN Sentiment Analysis - Mahtab's Main Pipeline")
+print("=" * 60)
 
 class MLPipeline:
-    """Complete ML pipeline for sentiment analysis."""
+    """Main ML Pipeline orchestrator."""
     
-    def __init__(self, config_file: Optional[str] = None):
-        try:
-            self.processing_config = ProcessingConfig()
-            self.train_config = TrainConfig()
-            self.model_config = ModelConfig()
-        except NameError:
-            print("⚠️ Config classes not available yet - team members need to complete their work")
-            self.processing_config = None
-            self.train_config = None
-            self.model_config = None
+    def __init__(self):
+        self.data = None
+        self.model = None
         
-        if config_file:
-            self.load_config(config_file)
-    
-    def load_config(self, config_file: str) -> None:
-        """Load configuration from file."""
-        logger.info(f"Config loading from {config_file} - will implement this later")
-    
-    def run_data_processing(self, data_path: str, save_processed: bool = True) -> Dict:
-        """Run data processing pipeline."""
-        logger.info("=" * 50)
-        logger.info("STARTING DATA PROCESSING PIPELINE")
-        logger.info("=" * 50)
+    def step1_data_processing(self, data_path="data/raw/data.csv"):
+        """Step 1: Process the data (Sachin's work)."""
+        print("\n📊 STEP 1: DATA PROCESSING (Sachin's Module)")
+        print("-" * 40)
         
         try:
-            # This will work when Sachin completes his part
-            data = load_and_process_data(data_path, self.processing_config)
+            from data.processor import load_and_process_data, ProcessingConfig
             
-            logger.info(f"✅ Data processing completed successfully!")
-            logger.info(f"   - Total samples: {len(data['X'])}")
-            logger.info(f"   - Vocabulary size: {len(data['vocab'])}")
+            config = ProcessingConfig(
+                max_vocab_size=5000,
+                max_seq_length=100,
+                min_word_freq=2
+            )
             
-            # Print sentiment distribution
-            unique, counts = np.unique(data['y'], return_counts=True)
-            sentiment_dist = dict(zip(unique, counts))
-            logger.info(f"   - Sentiment distribution: {sentiment_dist}")
+            self.data = load_and_process_data(data_path, config)
             
-            if save_processed:
-                processed_dir = Path("data/processed")
-                processed_dir.mkdir(exist_ok=True)
-                
-                # Save processed data
-                with open(processed_dir / "processed_data.pkl", 'wb') as f:
-                    pickle.dump(data, f)
-                logger.info(f"   - Processed data saved to data/processed/")
+            print(f"✅ Data processing completed!")
+            print(f"   📝 Total samples: {len(self.data['X'])}")
+            print(f"   📚 Vocabulary size: {len(self.data['vocab'])}")
             
-            return data
+            # Show sentiment distribution
+            unique, counts = np.unique(self.data['y'], return_counts=True)
+            for sentiment, count in zip(unique, counts):
+                print(f"   {sentiment}: {count} samples")
             
+            return True
+            
+        except ImportError:
+            print("❌ Data processing module not found!")
+            print("   Waiting for Sachin to push data/processor.py")
+            return False
         except Exception as e:
-            logger.error(f"❌ Data processing failed: {str(e)}")
-            logger.error("This might be because Sachin hasn't completed the data processing module yet")
-            raise
+            print(f"❌ Data processing failed: {e}")
+            return False
     
-    def run_model_training(self, data: Dict, model_name: str = "sentiment_cnn") -> Dict:
-        """Run model training pipeline."""
-        logger.info("=" * 50)
-        logger.info("STARTING MODEL TRAINING PIPELINE")
-        logger.info("=" * 50)
+    def step2_model_training(self, model_name="mahtab_sentiment_model"):
+        """Step 2: Train the model (Shiv's work)."""
+        print("\n🤖 STEP 2: MODEL TRAINING (Shiv's Module)")
+        print("-" * 40)
+        
+        if self.data is None:
+            print("❌ No data available! Run data processing first.")
+            return False
         
         try:
-            # This will work when Shiv completes his part
-            trainer = ModelTrainer(self.train_config, self.model_config)
-            results = trainer.train(data['X'], data['y'], data['vocab'])
+            from models.trainer import ModelTrainer, TrainConfig, ModelConfig
+            
+            train_config = TrainConfig(
+                batch_size=32,
+                num_epochs=10,  # Reduced for faster training
+                learning_rate=0.001,
+                patience=5
+            )
+            
+            model_config = ModelConfig(
+                embed_dim=128,
+                filter_sizes=[3, 4, 5],
+                num_filters=100,
+                dropout=0.3
+            )
+            
+            trainer = ModelTrainer(train_config, model_config)
+            results = trainer.train(self.data['X'], self.data['y'], self.data['vocab'])
             
             # Save model
             model_path = trainer.save_model(model_name)
             
-            logger.info(f"✅ Model training completed successfully!")
-            logger.info(f"   - Model saved to: {model_path}")
-            logger.info(f"   - Test accuracy: {results['test_results']['accuracy']:.4f}")
-            logger.info(f"   - F1-weighted: {results['test_results']['f1_weighted']:.4f}")
+            print(f"✅ Model training completed!")
+            print(f"   💾 Model saved: {model_path}")
+            print(f"   📊 Test accuracy: {results['test_results']['accuracy']:.4f}")
+            print(f"   📈 F1-score: {results['test_results']['f1_weighted']:.4f}")
             
-            # Plot training curves (if possible)
-            try:
-                plot_training_curves(
-                    results['train_losses'], 
-                    results['val_losses'], 
-                    results['val_accuracies']
-                )
-                
-                plot_confusion_matrix(
-                    results['test_results']['confusion_matrix'],
-                    ['negative', 'neutral', 'positive']
-                )
-            except Exception as e:
-                logger.warning(f"Could not display plots: {e}")
+            return True
             
-            return results
-            
+        except ImportError:
+            print("❌ Model training module not found!")
+            print("   Waiting for Shiv to push models/trainer.py")
+            return False
         except Exception as e:
-            logger.error(f"❌ Model training failed: {str(e)}")
-            logger.error("This might be because Shiv hasn't completed the model training module yet")
-            raise
+            print(f"❌ Model training failed: {e}")
+            return False
     
-    def run_inference(self, texts: list, model_name: str = "sentiment_cnn") -> list:
-        """Run inference pipeline."""
-        logger.info("=" * 50)
-        logger.info("STARTING INFERENCE PIPELINE")
-        logger.info("=" * 50)
+    def step3_test_inference(self, model_name="mahtab_sentiment_model"):
+        """Step 3: Test inference (integration test)."""
+        print("\n🎯 STEP 3: INFERENCE TESTING (Integration)")
+        print("-" * 40)
         
         try:
-            # This will work when Shiv completes his part
+            from models.inference import load_predictor
+            
             predictor = load_predictor(model_name)
-            results = predictor.predict_batch(texts)
             
-            logger.info(f"✅ Inference completed successfully!")
-            logger.info(f"   - Processed {len(texts)} texts")
+            # Test predictions
+            test_texts = [
+                "I absolutely love this product! It's amazing!",
+                "This is terrible, worst experience ever.",
+                "It's okay, nothing special really."
+            ]
             
-            # Print sample results
-            for i, result in enumerate(results[:3]):
-                text_preview = result['text'][:50] + '...' if len(result['text']) > 50 else result['text']
-                logger.info(f"   - Sample {i+1}: '{text_preview}' -> {result['predicted_sentiment']} ({result['confidence']:.3f})")
+            print("Testing predictions:")
+            for text in test_texts:
+                result = predictor.predict_single(text)
+                sentiment = result['predicted_sentiment']
+                confidence = result['confidence']
+                print(f"   '{text[:30]}...' -> {sentiment} ({confidence:.3f})")
             
-            return results
+            print("✅ Inference testing completed!")
+            return True
             
+        except ImportError:
+            print("❌ Inference module not found!")
+            print("   Waiting for Shiv to push models/inference.py")
+            return False
         except Exception as e:
-            logger.error(f"❌ Inference failed: {str(e)}")
-            logger.error("This might be because Shiv hasn't completed the inference module yet")
-            raise
+            print(f"❌ Inference testing failed: {e}")
+            return False
     
-    def run_full_pipeline(self, data_path: str, model_name: str = "sentiment_cnn") -> Dict:
-        """Run complete pipeline from data to trained model."""
-        logger.info("🚀 STARTING COMPLETE ML PIPELINE")
+    def run_full_pipeline(self, data_path="data/raw/data.csv"):
+        """Run the complete pipeline."""
+        print("\n🔥 RUNNING COMPLETE PIPELINE")
+        print("=" * 60)
         
         # Step 1: Data Processing
-        data = self.run_data_processing(data_path)
+        if not self.step1_data_processing(data_path):
+            print("⚠️  Pipeline stopped at data processing")
+            return False
         
         # Step 2: Model Training
-        training_results = self.run_model_training(data, model_name)
+        if not self.step2_model_training():
+            print("⚠️  Pipeline stopped at model training")
+            return False
         
-        # Step 3: Sample Inference Test
-        sample_texts = [
-            "I love this product! It's amazing!",
-            "This is terrible, worst experience ever.",
-            "It's okay, nothing special really."
-        ]
+        # Step 3: Inference Testing
+        if not self.step3_test_inference():
+            print("⚠️  Pipeline stopped at inference testing")
+            return False
         
-        inference_results = self.run_inference(sample_texts, model_name)
-        
-        logger.info("🎉 COMPLETE PIPELINE FINISHED SUCCESSFULLY!")
-        
-        return {
-            'data': data,
-            'training_results': training_results,
-            'sample_inference': inference_results
-        }
+        print("\n🎉 COMPLETE PIPELINE SUCCESSFUL!")
+        print("🚀 Ready to start API and Streamlit app!")
+        return True
 
-def create_parser() -> argparse.ArgumentParser:
-    """Create command line argument parser."""
-    parser = argparse.ArgumentParser(description='CNN Sentiment Analysis Pipeline')
+def create_sample_data():
+    """Create sample data if it doesn't exist."""
+    data_path = "data/raw/data.csv"
     
-    # Main commands
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    if os.path.exists(data_path):
+        return data_path
     
-    # Data processing command
-    process_parser = subparsers.add_parser('process', help='Process data')
-    process_parser.add_argument('--data_path', required=True, help='Path to input data CSV')
-    process_parser.add_argument('--save', action='store_true', help='Save processed data')
+    print("📝 Creating sample data...")
+    os.makedirs("data/raw", exist_ok=True)
     
-    # Training command
-    train_parser = subparsers.add_parser('train', help='Train model')
-    train_parser.add_argument('--data_path', help='Path to input data CSV')
-    train_parser.add_argument('--processed_data', help='Path to processed data pickle')
-    train_parser.add_argument('--model_name', default='sentiment_cnn', help='Model name for saving')
-    train_parser.add_argument('--epochs', type=int, help='Number of training epochs')
-    train_parser.add_argument('--batch_size', type=int, help='Batch size')
-    train_parser.add_argument('--learning_rate', type=float, help='Learning rate')
+    sample_data = {
+        'Post_ID': list(range(1, 21)),
+        'Platform': ['twitter', 'facebook', 'instagram'] * 7,
+        'Comment 1': [
+            "Love this product!", "Terrible service", "Good value for money",
+            "Outstanding quality!", "Poor customer support", "Decent purchase",
+            "Amazing experience", "Worst product ever", "Fair price point",
+            "Excellent service", "Disappointing quality", "Satisfied customer",
+            "Fantastic product", "Horrible experience", "Good quality",
+            "Perfect purchase", "Terrible quality", "Great value",
+            "Wonderful service", "Bad experience"
+        ],
+        'Comment 2': [
+            "Amazing quality", "Worst experience", "Decent quality",
+            "Exceeded expectations", "Broke quickly", "Works fine",
+            "Love it", "Hate it", "It's okay",
+            "Brilliant", "Useless", "Acceptable",
+            "Perfect", "Awful", "Good",
+            "Excellent", "Poor", "Nice",
+            "Great", "Bad"
+        ],
+        'Sentiment_Score': [
+            'positive', 'negative', 'neutral', 'positive', 'negative',
+            'neutral', 'positive', 'negative', 'neutral', 'positive',
+            'negative', 'neutral', 'positive', 'negative', 'neutral',
+            'positive', 'negative', 'neutral', 'positive', 'negative'
+        ]
+    }
     
-    # Inference command
-    infer_parser = subparsers.add_parser('infer', help='Run inference')
-    infer_parser.add_argument('--model_name', default='sentiment_cnn', help='Model name to load')
-    infer_parser.add_argument('--text', help='Single text to analyze')
-    infer_parser.add_argument('--texts_file', help='File with texts to analyze (one per line)')
-    infer_parser.add_argument('--output', help='Output file for results')
-    
-    # Full pipeline command
-    full_parser = subparsers.add_parser('full', help='Run complete pipeline')
-    full_parser.add_argument('--data_path', required=True, help='Path to input data CSV')
-    full_parser.add_argument('--model_name', default='sentiment_cnn', help='Model name for saving')
-    
-    return parser
+    df = pd.DataFrame(sample_data)
+    df.to_csv(data_path, index=False)
+    print(f"✅ Sample data created: {data_path}")
+    return data_path
 
 def main():
     """Main entry point."""
-    parser = create_parser()
+    parser = argparse.ArgumentParser(description='CNN Sentiment Analysis Pipeline')
+    parser.add_argument('--action', choices=['test', 'process', 'train', 'infer', 'full'], 
+                       default='test', help='Action to perform')
+    parser.add_argument('--data_path', help='Path to data file')
+    
     args = parser.parse_args()
     
-    if not args.command:
-        parser.print_help()
-        return
+    # Ensure data exists
+    if not args.data_path:
+        args.data_path = create_sample_data()
     
     # Initialize pipeline
     pipeline = MLPipeline()
     
-    try:
-        if args.command == 'process':
-            data = pipeline.run_data_processing(args.data_path, args.save)
-            print(f"✅ Data processing completed. Vocabulary size: {len(data['vocab'])}")
+    if args.action == 'test':
+        print("🧪 Running basic tests...")
+        pipeline.step1_data_processing(args.data_path)
         
-        elif args.command == 'train':
-            # Load or process data
-            if args.processed_data:
-                with open(args.processed_data, 'rb') as f:
-                    data = pickle.load(f)
-            elif args.data_path:
-                data = pipeline.run_data_processing(args.data_path)
-            else:
-                print("❌ Either --data_path or --processed_data must be provided")
-                return
-            
-            # Override config if provided
-            if args.epochs and pipeline.train_config:
-                pipeline.train_config.num_epochs = args.epochs
-            if args.batch_size and pipeline.train_config:
-                pipeline.train_config.batch_size = args.batch_size
-            if args.learning_rate and pipeline.train_config:
-                pipeline.train_config.learning_rate = args.learning_rate
-            
-            results = pipeline.run_model_training(data, args.model_name)
-            print(f"✅ Training completed. Test accuracy: {results['test_results']['accuracy']:.4f}")
+    elif args.action == 'process':
+        pipeline.step1_data_processing(args.data_path)
         
-        elif args.command == 'infer':
-            if args.text:
-                texts = [args.text]
-            elif args.texts_file:
-                with open(args.texts_file, 'r') as f:
-                    texts = [line.strip() for line in f if line.strip()]
-            else:
-                print("❌ Either --text or --texts_file must be provided")
-                return
+    elif args.action == 'train':
+        if pipeline.step1_data_processing(args.data_path):
+            pipeline.step2_model_training()
             
-            results = pipeline.run_inference(texts, args.model_name)
-            
-            # Output results
-            if args.output:
-                import json
-                with open(args.output, 'w') as f:
-                    json.dump(results, f, indent=2)
-                print(f"✅ Results saved to {args.output}")
-            else:
-                for result in results:
-                    print(f"Text: {result['text']}")
-                    print(f"Sentiment: {result['predicted_sentiment']} (confidence: {result['confidence']:.3f})")
-                    print("-" * 50)
+    elif args.action == 'infer':
+        pipeline.step3_test_inference()
         
-        elif args.command == 'full':
-            results = pipeline.run_full_pipeline(args.data_path, args.model_name)
-            print("🎉 Complete pipeline finished successfully!")
+    elif args.action == 'full':
+        pipeline.run_full_pipeline(args.data_path)
     
-    except Exception as e:
-        logger.error(f"❌ Pipeline failed: {str(e)}")
-        print("\n🔍 TROUBLESHOOTING:")
-        print("1. Make sure Sachin has completed the data processing module")
-        print("2. Make sure Shiv has completed the model training module")
-        print("3. Check that the data file exists and is in the correct format")
-        sys.exit(1)
+    print(f"\n👨‍💼 Mahtab's pipeline execution completed!")
 
 if __name__ == "__main__":
     main()
