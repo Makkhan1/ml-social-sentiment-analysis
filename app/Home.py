@@ -1,303 +1,555 @@
 """
-Streamlit web app for CNN sentiment analysis.
-Author: Mahtab (Project Lead)
+Sentiment Analysis Dashboard - Home Page
+Complete ML Pipeline with CNN Model
 """
 
 import streamlit as st
-import requests
-import json
+import sys
+import os
 import pandas as pd
-from typing import Dict, List
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torch
+import pickle
+import json
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
-# Configuration
-API_BASE_URL = "http://localhost:8000"
+# Add src to path for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-# Page setup
+try:
+    from data.processor import DataPreprocessor, load_data_from_url
+    from models.trainer import (
+        Vocabulary, SentimentDataset, CNNSentimentClassifier,
+        ModelTrainer, device
+    )
+    from models.inference import predict_sentiment, evaluate_model_comprehensive
+except Exception as e:
+    st.error(f"Import error: {e}")
+    st.stop()
+
+# Page configuration
 st.set_page_config(
-    page_title="CNN Sentiment Analysis",
+    page_title="🎭 Sentiment Analysis Dashboard",
     page_icon="🎭",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Custom styling
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
         font-size: 3rem;
-        font-weight: bold;
+        color: #1f77b4;
         text-align: center;
-        color: #2e86ab;
         margin-bottom: 2rem;
     }
-    .prediction-box {
-        background: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
+    .stApp > header {
+        background-color: transparent;
+    }
+    .stApp {
+        margin-top: -80px;
+    }
+    .css-1d391kg {
+        padding-top: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
-
-def check_api_health():
-    """Check if our API is running."""
+@st.cache_data
+def load_model_and_vocab():
+    """Load trained model and vocabulary"""
     try:
-        response = requests.get(f"{API_BASE_URL}/health", timeout=5)
-        return response.status_code == 200, response.json()
+        # Get current working directory and project root
+        current_dir = os.getcwd()
+        
+        # Try different possible paths for the model files
+        possible_paths = [
+            # If running from ml-project/app/
+            ('../models/vocabulary.pkl', '../models/best_cnn_model.pth'),
+            # If running from ml-project/
+            ('models/vocabulary.pkl', 'models/best_cnn_model.pth'),
+            # If files are in root directory
+            ('vocabulary.pkl', 'best_cnn_model.pth'),
+            # If files are in current directory
+            ('./vocabulary.pkl', './best_cnn_model.pth')
+        ]
+        
+        vocab = None
+        model = None
+        
+        # Try each path combination
+        for vocab_path, model_path in possible_paths:
+            try:
+                     
+                if os.path.exists(vocab_path) and os.path.exists(model_path):
+                    # Load vocabulary
+                    with open(vocab_path, 'rb') as f:
+                        vocab = pickle.load(f)
+                    
+                    # Load model
+                    model = CNNSentimentClassifier(
+                             vocab_size=len(vocab),
+                              embed_dim=64,      # ← Changed from 128 to 64
+                             output_dim=3,
+                             filter_sizes=[3, 4, 5],
+                             num_filters=50,    # ← Changed from 100 to 50
+                             dropout=0.3
+                          )
+                    
+                    model.load_state_dict(torch.load(model_path, map_location=device))
+                    model.eval()
+                    
+                    st.success(f"✅ Model loaded from: {model_path}")
+                    st.success(f"✅ Vocabulary loaded from: {vocab_path}")
+                    return model, vocab, True
+                    
+            except Exception as e:
+                   
+                continue
+        
+        # If we get here, no paths worked
+        st.error("❌ Could not find model files in any expected location")
+        
+        # Show what files actually exist
+        for root, dirs, files in os.walk('.'):
+            for file in files:
+                if file.endswith(('.pth', '.pkl', '.json')):
+                    st.write(f"  {os.path.join(root, file)}")
+        
+        return None, None, False
+        
+    except Exception as e:
+        st.error(f"Error in load_model_and_vocab: {e}")
+        return None, None, False
+
+@st.cache_data
+def load_sample_data():
+    """Load sample data for testing"""
+    try:
+        df = load_data_from_url()
+        return df.head(100), True
     except:
-        return False, None
+        # Fallback sample data
+        sample_texts = [
+            "I love this product! It's amazing!",
+            "This is okay, nothing special.",
+            "I hate this. Worst experience ever.",
+            "The service was fantastic and the staff was very helpful.",
+            "Not bad, could be better though.",
+            "Absolutely terrible quality. Would not recommend.",
+            "Great value for money. Highly satisfied!",
+            "It's alright, meets basic expectations.",
+            "Disappointing product. Poor quality control.",
+            "Excellent customer service and fast delivery!"
+        ]
+        return pd.DataFrame({'text': sample_texts}), True
 
-def predict_text(text: str):
-    """Send text to API for prediction."""
+def predict_sentiment_advanced(text, model, vocab):
+    """Advanced sentiment prediction with confidence"""
     try:
-        response = requests.post(
-            f"{API_BASE_URL}/predict",
-            json={"text": text},
-            timeout=30
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {"error": f"API Error: {response.status_code} - {response.text}"}
+        # Basic prediction
+        sentiment, probabilities = predict_sentiment(model, text, vocab, max_length=50, device=device)
+        
+        # Get confidence score
+        confidence = np.max(probabilities)
+        
+        # Create detailed results
+        results = {
+            'sentiment': sentiment,
+            'confidence': confidence,
+            'probabilities': {
+                'negative': probabilities[0],
+                'neutral': probabilities[1], 
+                'positive': probabilities[2]
+            }
+        }
+        
+        return results
     except Exception as e:
-        return {"error": f"Connection failed: {str(e)}"}
-
-def predict_batch(texts: List[str]):
-    """Send multiple texts to API for prediction."""
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/predict/batch",
-            json={"texts": texts},
-            timeout=60
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {"error": f"API Error: {response.status_code} - {response.text}"}
-    except Exception as e:
-        return {"error": f"Connection failed: {str(e)}"}
-
+        st.error(f"Prediction error: {e}")
+        return None
 def main():
-    """Main Streamlit app."""
+    """Main application function"""
     
     # Header
-    st.markdown('<h1 class="main-header">🎭 CNN Sentiment Analysis</h1>', unsafe_allow_html=True)
-    st.markdown("---")
+    st.markdown('<h1 class="main-header">🎭 Sentiment Analysis Dashboard</h1>', unsafe_allow_html=True)
     
-    # Check API status
-    api_healthy, health_info = check_api_health()
+    # Sidebar
+    st.sidebar.title("📊 Navigation")
+    page = st.sidebar.selectbox(
+        "Choose a page:",
+        ["🏠 Home", "🔮 Predict Sentiment", "📈 Model Analytics", "🧪 Batch Analysis"]
+    )
     
-    if not api_healthy:
-        st.error("⚠️ API is not running!")
-        st.info("Please start the API server first:")
-        st.code("python app/backend.py", language="bash")
-        st.stop()
+    # Load model and vocab
+    with st.spinner("Loading model and vocabulary..."):
+        model, vocab, model_loaded = load_model_and_vocab()
     
-    # Show API status
-    col1, col2, col3 = st.columns(3)
+    if not model_loaded:
+        st.error("❌ Could not load model. Please check if model files exist.")
+        st.info("💡 Run the training pipeline first: `python src/main.py`")
+        return
+    
+    # Page routing
+    if page == "🏠 Home":
+        show_home_page()
+    elif page == "🔮 Predict Sentiment":
+        show_prediction_page(model, vocab)
+    elif page == "📈 Model Analytics":
+        show_analytics_page()
+    elif page == "🧪 Batch Analysis":
+        show_batch_analysis_page(model, vocab)
+
+def show_home_page():
+    """Home page content"""
+    st.subheader("Welcome to the Sentiment Analysis Dashboard! 🎉")
+    
+    col1, col2 = st.columns(2)
+    
     with col1:
-        st.success("✅ API is running")
-    with col2:
-        if health_info and health_info.get('model_loaded'):
-            st.success("✅ Model loaded")
-        else:
-            st.warning("⚠️ Model not loaded")
-    with col3:
-        if health_info and health_info.get('models_available'):
-            st.success("✅ Modules available")
-        else:
-            st.warning("⚠️ Waiting for Shiv's modules")
-    
-    st.markdown("---")
-    
-    # Main interface
-    tab1, tab2, tab3 = st.tabs(["🔍 Single Text", "📊 Batch Analysis", "ℹ️ About"])
-    
-    with tab1:
-        st.header("🔍 Single Text Analysis")
+        st.markdown("""
+        ### 🔍 What This App Does:
+        - **Real-time sentiment analysis** using a trained CNN model
+        - **Batch processing** for multiple texts
+        - **Model performance analytics** and visualizations
+        - **Interactive predictions** with confidence scores
         
+        ### 🧠 Model Details:
+        - **Architecture:** Convolutional Neural Network (CNN)
+        - **Classes:** Positive, Neutral, Negative
+        - **Features:** Word embeddings, multiple filter sizes
+        - **Training Data:** Social media comments and posts
+        """)
+    
+    with col2:
+        st.markdown("""
+        ### 🚀 How to Use:
+        1. **Navigate** using the sidebar menu
+        2. **Single Prediction:** Use "🔮 Predict Sentiment" page
+        3. **Batch Analysis:** Upload CSV or paste multiple texts
+        4. **Analytics:** View model performance metrics
+        
+        ### 📊 Features:
+        - ✅ Real-time predictions
+        - ✅ Confidence scores
+        - ✅ Probability distributions
+        - ✅ Batch processing
+        - ✅ Data visualization
+        """)
+    
+    # Quick test section
+    st.subheader("🎯 Quick Test")
+    test_text = st.text_input("Enter text to analyze:", "I love this application!")
+    
+    if st.button("🔍 Analyze") and test_text:
+        with st.spinner("Analyzing..."):
+            model, vocab, _ = load_model_and_vocab()
+            result = predict_sentiment_advanced(test_text, model, vocab)
+            
+            if result:
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Sentiment", result['sentiment'].title())
+                
+                with col2:
+                    st.metric("Confidence", f"{result['confidence']:.2%}")
+                
+                with col3:
+                    sentiment_emoji = {"positive": "😊", "neutral": "😐", "negative": "😢"}
+                    st.metric("Result", sentiment_emoji.get(result['sentiment'], "🤔"))
+def show_prediction_page(model, vocab):
+    """Sentiment prediction page"""
+    st.subheader("🔮 Real-time Sentiment Prediction")
+    
+    # Input methods
+    input_method = st.radio("Choose input method:", ["✏️ Type Text", "📁 Upload File"])
+    
+    if input_method == "✏️ Type Text":
         # Text input
         user_text = st.text_area(
             "Enter text to analyze:",
-            placeholder="Type your text here... (e.g., 'I love this product!')",
-            height=100
+            height=150,
+            placeholder="Type your text here... (e.g., 'I love this product!')"
         )
         
-        # Predict button
-        if st.button("🎯 Analyze Sentiment", type="primary"):
-            if user_text.strip():
-                with st.spinner("Analyzing sentiment..."):
-                    result = predict_text(user_text)
-                    
-                    if "error" in result:
-                        st.error(f"❌ {result['error']}")
-                    else:
-                        # Display results
-                        sentiment = result['predicted_sentiment']
-                        confidence = result['confidence']
-                        
-                        # Emoji mapping
-                        emoji_map = {
-                            'positive': '😊',
-                            'neutral': '😐',
-                            'negative': '😞'
-                        }
-                        
-                        # Color mapping
-                        color_map = {
-                            'positive': '#28a745',
-                            'neutral': '#ffc107',
-                            'negative': '#dc3545'
-                        }
-                        
-                        st.markdown(f"""
-                        <div class="prediction-box">
-                            <h3>{emoji_map.get(sentiment, '🤖')} Predicted Sentiment: 
-                            <span style="color: {color_map.get(sentiment, '#000')}">{sentiment.title()}</span></h3>
-                            <p><strong>Confidence:</strong> {confidence:.1%}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Show probability distribution
-                        if 'probability_distribution' in result:
-                            st.subheader("📊 Probability Distribution")
-                            prob_dist = result['probability_distribution']
-                            
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Positive", f"{prob_dist.get('positive', 0):.1%}")
-                            with col2:
-                                st.metric("Neutral", f"{prob_dist.get('neutral', 0):.1%}")
-                            with col3:
-                                st.metric("Negative", f"{prob_dist.get('negative', 0):.1%}")
-            else:
-                st.warning("Please enter some text to analyze.")
-    
-    with tab2:
-        st.header("📊 Batch Text Analysis")
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            analyze_button = st.button("🔍 Analyze Sentiment", type="primary")
         
-        # Input method selection
-        input_method = st.radio(
-            "Choose input method:",
-            ["Text Area", "Upload File"],
-            horizontal=True
-        )
-        
-        texts_to_analyze = []
-        
-        if input_method == "Text Area":
-            batch_text = st.text_area(
-                "Enter multiple texts (one per line):",
-                placeholder="Enter each text on a new line...\nExample: I love this!\nExample: This is terrible.\nExample: It's okay.",
-                height=150
-            )
-            
-            if batch_text.strip():
-                texts_to_analyze = [line.strip() for line in batch_text.split('\n') if line.strip()]
-        
-        else:  # Upload File
-            uploaded_file = st.file_uploader(
-                "Upload text file",
-                type=['txt'],
-                help="Upload a .txt file with one text per line"
-            )
-            
-            if uploaded_file:
-                content = uploaded_file.read().decode('utf-8')
-                texts_to_analyze = [line.strip() for line in content.split('\n') if line.strip()]
-        
-        if texts_to_analyze:
-            st.info(f"📝 Ready to analyze {len(texts_to_analyze)} texts")
-            
-            if st.button("🎯 Analyze All", type="primary"):
-                if len(texts_to_analyze) > 100:
-                    st.warning("Too many texts! Limiting to first 100.")
-                    texts_to_analyze = texts_to_analyze[:100]
+        if analyze_button and user_text:
+            with st.spinner("Analyzing sentiment..."):
+                result = predict_sentiment_advanced(user_text, model, vocab)
                 
-                with st.spinner(f"Analyzing {len(texts_to_analyze)} texts..."):
-                    result = predict_batch(texts_to_analyze)
+                if result:
+                    # Display results
+                    st.subheader("📊 Analysis Results")
                     
-                    if "error" in result:
-                        st.error(f"❌ {result['error']}")
+                    # Metrics row
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        sentiment_colors = {"positive": "green", "neutral": "orange", "negative": "red"}
+                        st.metric(
+                            "Predicted Sentiment", 
+                            result['sentiment'].title(),
+                            delta_color=sentiment_colors.get(result['sentiment'], "gray")
+                        )
+                    
+                    with col2:
+                        st.metric("Confidence Score", f"{result['confidence']:.2%}")
+                    
+                    with col3:
+                        st.metric("Text Length", f"{len(user_text.split())} words")
+                    
+                    with col4:
+                        sentiment_emoji = {"positive": "😊", "neutral": "😐", "negative": "😢"}
+                        st.metric("Mood", sentiment_emoji.get(result['sentiment'], "🤔"))
+                    
+                    # Probability distribution
+                    st.subheader("📈 Probability Distribution")
+                    
+                    prob_df = pd.DataFrame({
+                        'Sentiment': ['Negative', 'Neutral', 'Positive'],
+                        'Probability': [
+                            result['probabilities']['negative'],
+                            result['probabilities']['neutral'],
+                            result['probabilities']['positive']
+                        ]
+                    })
+                    
+                    # Bar chart
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    colors = ['#ff6b6b', '#ffd93d', '#6bcf7f']
+                    bars = ax.bar(prob_df['Sentiment'], prob_df['Probability'], color=colors, alpha=0.8)
+                    
+                    # Customize chart
+                    ax.set_ylabel('Probability')
+                    ax.set_title('Sentiment Probability Distribution')
+                    ax.set_ylim(0, 1)
+                    
+                    # Add value labels on bars
+                    for bar, prob in zip(bars, prob_df['Probability']):
+                        height = bar.get_height()
+                        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                               f'{prob:.3f}', ha='center', va='bottom')
+                    
+                    st.pyplot(fig)
+                    
+                    # Confidence interpretation
+                    st.subheader("🎯 Confidence Interpretation")
+                    confidence = result['confidence']
+                    
+                    if confidence >= 0.8:
+                        st.success(f"🎯 **High Confidence** ({confidence:.2%}) - The model is very confident in this prediction.")
+                    elif confidence >= 0.6:
+                        st.warning(f"⚖️ **Medium Confidence** ({confidence:.2%}) - The model is moderately confident.")
                     else:
-                        # Display summary
-                        st.subheader("📈 Summary")
-                        col1, col2, col3, col4 = st.columns(4)
+                        st.info(f"🤔 **Low Confidence** ({confidence:.2%}) - The model is uncertain. Consider the context.")
+    
+    else:  # File upload
+        uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file)
+                st.write("Preview of uploaded data:")
+                st.dataframe(df.head())
+                
+                text_column = st.selectbox("Select text column:", df.columns)
+                
+                if st.button("🔍 Analyze All"):
+                    with st.spinner("Analyzing all texts..."):
+                        results = []
+                        for text in df[text_column]:
+                            result = predict_sentiment_advanced(str(text), model, vocab)
+                            if result:
+                                results.append({
+                                    'text': text,
+                                    'sentiment': result['sentiment'],
+                                    'confidence': result['confidence']
+                                })
+                        
+                        results_df = pd.DataFrame(results)
+                        st.subheader("📊 Batch Analysis Results")
+                        st.dataframe(results_df)
+                        
+                        # Summary statistics
+                        st.subheader("📈 Summary Statistics")
+                        col1, col2 = st.columns(2)
                         
                         with col1:
-                            st.metric("Total Texts", result['total_count'])
+                            sentiment_counts = results_df['sentiment'].value_counts()
+                            fig, ax = plt.subplots()
+                            sentiment_counts.plot(kind='pie', ax=ax, autopct='%1.1f%%')
+                            ax.set_title('Sentiment Distribution')
+                            st.pyplot(fig)
                         
-                        summary = result.get('sentiment_summary', {})
                         with col2:
-                            st.metric("Positive", summary.get('positive', 0))
-                        with col3:
-                            st.metric("Neutral", summary.get('neutral', 0))
-                        with col4:
-                            st.metric("Negative", summary.get('negative', 0))
-                        
-                        # Display detailed results
-                        st.subheader("📋 Detailed Results")
-                        predictions = result.get('predictions', [])
-                        
-                        if predictions:
-                            # Create DataFrame for better display
-                            df_results = []
-                            for pred in predictions:
-                                df_results.append({
-                                    'Text': pred['text'][:100] + '...' if len(pred['text']) > 100 else pred['text'],
-                                    'Sentiment': pred['predicted_sentiment'],
-                                    'Confidence': f"{pred['confidence']:.1%}"
-                                })
+                            avg_confidence = results_df['confidence'].mean()
+                            st.metric("Average Confidence", f"{avg_confidence:.2%}")
                             
-                            df = pd.DataFrame(df_results)
-                            st.dataframe(df, use_container_width=True)
-                            
-                            # Download option
-                            csv = df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Download Results as CSV",
-                                data=csv,
-                                file_name="sentiment_analysis_results.csv",
-                                mime="text/csv"
-                            )
+                            st.write("**Confidence Distribution:**")
+                            fig, ax = plt.subplots()
+                            ax.hist(results_df['confidence'], bins=20, alpha=0.7)
+                            ax.set_xlabel('Confidence Score')
+                            ax.set_ylabel('Frequency')
+                            ax.set_title('Confidence Score Distribution')
+                            st.pyplot(fig)
+                        
+            except Exception as e:
+                st.error(f"Error processing file: {e}")
+def show_analytics_page():
+    """Model analytics and performance page"""
+    st.subheader("📈 Model Performance Analytics")
     
-    with tab3:
-        st.header("ℹ️ About This Project")
+    try:
+        # Load results if available
+        with open('models/pipeline_results.json', 'r') as f:
+            results = json.load(f)
         
-        st.markdown("""
-        ### 🎯 CNN Sentiment Analysis Project
+        # Display metrics
+        col1, col2, col3, col4 = st.columns(4)
         
-        This is a machine learning project that analyzes the sentiment of text using a Convolutional Neural Network (CNN).
+        with col1:
+            st.metric("Test Accuracy", f"{results.get('test_accuracy', 0):.2%}")
         
-        **Team Members:**
-        - **Mahtab** - Project Lead & API Development 
-        - **Sachin** - Data Processing & EDA
-        - **Shiv** - Model Training & Inference
+        with col2:
+            st.metric("F1-Score (Weighted)", f"{results.get('test_f1_weighted', 0):.3f}")
         
-        **Features:**
-        - ✅ Single text sentiment analysis
-        - ✅ Batch text processing
-        - ✅ Real-time predictions via API
-        - ✅ Interactive web interface
+        with col3:
+            st.metric("F1-Score (Macro)", f"{results.get('test_f1_macro', 0):.3f}")
         
-        **Tech Stack:**
-        - **Backend:** FastAPI
-        - **Frontend:** Streamlit  
-        - **ML Framework:** PyTorch
-        - **Data Processing:** pandas, NLTK
+        with col4:
+            st.metric("Training Epochs", results.get('epochs_trained', 'N/A'))
+        
+        # Model architecture info
+        st.subheader("🏗️ Model Architecture")
+        st.code("""
+CNN Sentiment Classifier:
+├── Embedding Layer (vocab_size → 128)
+├── Convolutional Layers
+│   ├── Conv1D (filter_size=3, filters=100)
+│   ├── Conv1D (filter_size=4, filters=100)
+│   └── Conv1D (filter_size=5, filters=100)
+├── Max Pooling
+├── Dropout (0.3)
+└── Dense Layer (300 → 3)
+
+Total Parameters: ~1.2M
+Device: CPU/GPU
         """)
         
-        # API testing section
-        st.subheader("🔧 API Testing")
-        if st.button("Test API Connection"):
-            try:
-                response = requests.get(f"{API_BASE_URL}/test")
-                if response.status_code == 200:
-                    st.success("✅ API connection successful!")
-                    st.json(response.json())
-                else:
-                    st.error(f"❌ API test failed: {response.status_code}")
-            except Exception as e:
-                st.error(f"❌ Connection failed: {e}")
+        # Training history if available
+        if 'training_history' in results:
+            st.subheader("📊 Training History")
+            
+            history = results['training_history']
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Loss plot
+                epochs = list(range(1, len(history['train_losses']) + 1))
+                fig, ax = plt.subplots()
+                ax.plot(epochs, history['train_losses'], label='Training Loss', color='blue')
+                ax.plot(epochs, history['val_losses'], label='Validation Loss', color='red')
+                ax.set_xlabel('Epoch')
+                ax.set_ylabel('Loss')
+                ax.set_title('Training and Validation Loss')
+                ax.legend()
+                ax.grid(True)
+                st.pyplot(fig)
+            
+            with col2:
+                # Accuracy plot
+                fig, ax = plt.subplots()
+                ax.plot(epochs, history['val_accuracies'], label='Validation Accuracy', color='green')
+                ax.set_xlabel('Epoch')
+                ax.set_ylabel('Accuracy (%)')
+                ax.set_title('Validation Accuracy')
+                ax.legend()
+                ax.grid(True)
+                st.pyplot(fig)
+    
+    except FileNotFoundError:
+        st.warning("📋 No training results found. Train the model first using `python src/main.py`")
+    except Exception as e:
+        st.error(f"Error loading analytics: {e}")
 
+def show_batch_analysis_page(model, vocab):
+    """Batch analysis page"""
+    st.subheader("🧪 Batch Sentiment Analysis")
+    
+    # Sample data option
+    if st.button("📋 Load Sample Data"):
+        sample_df, success = load_sample_data()
+        if success:
+            st.session_state['batch_data'] = sample_df
+            st.success("✅ Sample data loaded!")
+    
+    # Manual text input
+    st.subheader("✏️ Manual Input")
+    texts_input = st.text_area(
+        "Enter multiple texts (one per line):",
+        height=200,
+        placeholder="Enter each text on a new line...\nExample:\nI love this!\nThis is okay.\nI don't like it."
+    )
+    
+    if st.button("🔍 Analyze Texts") and texts_input:
+        texts = [text.strip() for text in texts_input.split('\n') if text.strip()]
+        
+        with st.spinner(f"Analyzing {len(texts)} texts..."):
+            results = []
+            progress_bar = st.progress(0)
+            
+            for i, text in enumerate(texts):
+                result = predict_sentiment_advanced(text, model, vocab)
+                if result:
+                    results.append({
+                        'Text': text[:100] + '...' if len(text) > 100 else text,
+                        'Sentiment': result['sentiment'],
+                        'Confidence': result['confidence']
+                    })
+                
+                progress_bar.progress((i + 1) / len(texts))
+            
+            if results:
+                results_df = pd.DataFrame(results)
+                
+                st.subheader("📊 Batch Results")
+                st.dataframe(results_df)
+                
+                # Summary
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    sentiment_counts = results_df['Sentiment'].value_counts()
+                    st.write("**Sentiment Distribution:**")
+                    for sentiment, count in sentiment_counts.items():
+                        percentage = (count / len(results)) * 100
+                        st.write(f"- {sentiment.title()}: {count} ({percentage:.1f}%)")
+                
+                with col2:
+                    avg_confidence = results_df['Confidence'].mean()
+                    st.metric("Average Confidence", f"{avg_confidence:.2%}")
+                    
+                    high_conf = (results_df['Confidence'] >= 0.8).sum()
+                    st.write(f"**High Confidence (≥80%):** {high_conf}/{len(results)}")
+                
+                with col3:
+                    # Visualization
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    sentiment_counts.plot(kind='bar', ax=ax, color=['#ff6b6b', '#ffd93d', '#6bcf7f'])
+                    ax.set_title('Sentiment Distribution')
+                    ax.set_xlabel('Sentiment')
+                    ax.set_ylabel('Count')
+                    plt.xticks(rotation=45)
+                    st.pyplot(fig)
+
+# Run the app
 if __name__ == "__main__":
     main()
