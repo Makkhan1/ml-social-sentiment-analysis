@@ -1,0 +1,1 @@
+Streamlit transforms Python scripts into interactive web applications effortlessly. It provides widgets like sliders, buttons, and text inputs for user interaction. Data scientists can create dashboards, visualize datasets, and deploy machine learning models instantly. With minimal code, you can build beautiful apps. Simply run streamlit run script.py to launch.
